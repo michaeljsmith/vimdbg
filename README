@@ -1,0 +1,3 @@
+VIMdbg - a plugin for vim that turns the editor into a front-end for command line debuggers such 
+as GDB. Initially only GDB will be supported, but eventually other debuggers such as Microsoft 
+CDB or the Python debugger will be supported.
