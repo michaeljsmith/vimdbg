@@ -16,9 +16,10 @@ function! <Sid>LoadPython()
 	exe 'python import ' . s:script_module
 endfunction
 
-call <Sid>LoadPython()
-call <Sid>DbgCommand("gdb_driver = vimdbg.GdbDriver()")
-call <Sid>DbgCommand("gdb_session = vimdbg.Session(gdb_driver)")
-call <Sid>DbgCommand("gdb_session.display_log_window()")
-call <Sid>DbgCommand("gdb_session.start_debugger()")
-
+function! GdbStart()
+	call <Sid>LoadPython()
+	call <Sid>DbgCommand("gdb_driver = vimdbg.GdbDriver()")
+	call <Sid>DbgCommand("gdb_session = vimdbg.Session(gdb_driver)")
+	call <Sid>DbgCommand("gdb_session.display_log_window()")
+	call <Sid>DbgCommand("gdb_session.start_debugger()")
+endfunction
