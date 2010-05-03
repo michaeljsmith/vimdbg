@@ -106,7 +106,6 @@ class Session(object):
 		self.driver_proxy = DriverProxy(driver)
 		self.log_window = LogWindow(self.session_id)
 		self.thread = None
-		self.message_queue = ThreadMessageQueue()
 		self.bps = bps
 		self.driver_connected_to_bps = False
 
@@ -142,10 +141,9 @@ class Session(object):
 		self.driver_proxy.start()
 
 		driver = self.driver
-		message_queue = self.message_queue
 		class Thread(threading.Thread):
 			def run(self):
-				driver.listen(message_queue)
+				driver.listen()
 		self.thread = Thread()
 		self.thread.start()
 
@@ -158,7 +156,7 @@ class Session(object):
 					'Cannot stop debugger - listen thread not running.')
 		self.driver_proxy.stop()
 		self.thread.join()
-		self.driver_proxy.read_all_pending(self.message_queue)
+		self.driver_proxy.update()
 
 	def run_debugger(self):
 		if not self.driver_connected_to_bps:
@@ -175,7 +173,7 @@ class Session(object):
 		if not self.thread:
 			raise ThreadNotRunningError(
 					'Cannot update dbg thread - listen thread not running.')
-		self.driver_proxy.read_all_pending(self.message_queue)
+		self.driver_proxy.update()
 
 	def connect_driver_to_breakpoints(self):
 		if self.driver_connected_to_bps:
@@ -203,25 +201,6 @@ class DriverProxy(object):
 		self.driver = driver
 		self.on_communication = Delegate()
 	
-	def read(self, queue):
-		try:
-			msg = queue.pop()
-		except IndexError:
-			raise QueueEmptyError('Tried to read from empty thread queue.')
-		meth, args = msg
-		try:
-			f = getattr(self, meth)
-		except AttributeError:
-			raise QueueCorruptError('Unknown method "' + meth + '".')
-		try:
-			f(*args)
-		except TypeError as e:
-			raise QueueCorruptError('Invalid args in queue: "' + e.msg + '".')
-
-	def read_all_pending(self, queue):
-		while not queue.empty():
-			self.read(queue)
-
 	def handle_communication(self, msg):
 		self.on_communication.signal(msg)
 
@@ -233,6 +212,9 @@ class DriverProxy(object):
 
 	def stop(self):
 		self.driver.stop()
+
+	def update(self):
+		self.driver.read_all_pending(self)
 
 	def run(self):
 		self.driver.run()
@@ -251,6 +233,7 @@ class GdbDriver(object):
 		self.process = None
 		self.running = False
 		self.on_log = Delegate()
+		self.message_queue = ThreadMessageQueue()
 
 	def start(self):
 		if self.process:
@@ -276,6 +259,25 @@ class GdbDriver(object):
 			raise DriverAlreadyRunningError("Cannot start debugging: already debugging.")
 		self.process.stdin.write('-exec-run\n')
 
+	def read(self, hdlr):
+		try:
+			msg = self.message_queue.pop()
+		except IndexError:
+			raise QueueEmptyError('Tried to read from empty thread queue.')
+		meth, args = msg
+		try:
+			f = getattr(hdlr, meth)
+		except AttributeError:
+			raise QueueCorruptError('Unknown method "' + meth + '".')
+		try:
+			f(*args)
+		except TypeError as e:
+			raise QueueCorruptError('Invalid args in queue: "' + e.msg + '".')
+
+	def read_all_pending(self, hdlr):
+		while not self.message_queue.empty():
+			self.read(hdlr)
+
 	def set_file(self, file):
 		self.on_log.signal("Setting debug file: " + file + "\n")
 		if not self.process:
@@ -284,13 +286,13 @@ class GdbDriver(object):
 			raise DriverAlreadyRunningError("Cannot set file: GDB already running.")
 		self.process.stdin.write('-file-exec-and-symbols ' + file + '\n')
 
-	def listen(self, queue):
+	def listen(self):
 		while True:
 			ln = self.process.stdout.readline()
 			if not ln:
-				queue.append(('handle_eof', []))
+				self.message_queue.append(('handle_eof', []))
 				break
-			queue.append(('handle_communication', [ln]))
+			self.message_queue.append(('handle_communication', [ln]))
 		self.process = None
 
 	def add_breakpoint(self, id, file, line):
