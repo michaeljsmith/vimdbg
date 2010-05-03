@@ -1,6 +1,7 @@
 import vim
 import subprocess
 import threading
+import time
 
 class Error(Exception): pass
 
@@ -49,6 +50,9 @@ class BreakpointMissingError(Error):
 class BreakpointAlreadyExistsError(Error):
 	def __init__(self, msg): self.msg = msg
 
+class UnexpectedResponseError(Error):
+	def __init__(self, msg): self.msg = msg
+
 class Delegate(object):
 	def __init__(self):
 		self.hndlrs = {}
@@ -92,6 +96,14 @@ class ThreadMessageQueue(object):
 			self.lock.release()
 		return l == 0
 
+def deserialize_gdb_record(rcrd, text):
+	entries = text.split(',')
+	response = entries[0]
+	rcrd.response = response
+	for entry in entries[1:]:
+		key, value = entry.split('=')
+		setattr(rcrd, key, value)
+
 session_id = 100
 def get_session_id():
 	global session_id
@@ -105,7 +117,6 @@ class Session(object):
 		self.driver = driver
 		self.driver_proxy = DriverProxy(driver)
 		self.log_window = LogWindow(self.session_id)
-		self.thread = None
 		self.bps = bps
 		self.driver_connected_to_bps = False
 
@@ -134,29 +145,14 @@ class Session(object):
 
 	def start_debugger(self):
 		self.log_window.log_message("Starting debugger.\n")
-		if self.thread:
-			raise ThreadAlreadyRunningError(
-					'Cannot start listen thread - already running.')
 
 		self.driver_proxy.start()
-
-		driver = self.driver
-		class Thread(threading.Thread):
-			def run(self):
-				driver.listen()
-		self.thread = Thread()
-		self.thread.start()
 
 	def stop_debugger(self):
 		self.log_window.log_message("Stopping debugger.")
 		if self.driver_connected_to_bps:
 			self.disconnect_driver_from_breakpoints()
-		if not self.thread:
-			raise ThreadNotRunningError(
-					'Cannot stop debugger - listen thread not running.')
 		self.driver_proxy.stop()
-		self.thread.join()
-		self.driver_proxy.update()
 
 	def run_debugger(self):
 		if not self.driver_connected_to_bps:
@@ -170,9 +166,6 @@ class Session(object):
 		except DebuggerMissingError: pass
 
 	def update(self):
-		if not self.thread:
-			raise ThreadNotRunningError(
-					'Cannot update dbg thread - listen thread not running.')
 		self.driver_proxy.update()
 
 	def connect_driver_to_breakpoints(self):
@@ -208,7 +201,7 @@ class DriverProxy(object):
 		print "Debugger process exitted."
 
 	def start(self):
-		self.driver.start()
+		self.driver.start(self)
 
 	def stop(self):
 		self.driver.stop()
@@ -217,16 +210,16 @@ class DriverProxy(object):
 		self.driver.read_all_pending(self)
 
 	def run(self):
-		self.driver.run()
+		self.driver.run(self)
 
 	def set_file(self, file):
 		self.driver.set_file(file)
 
 	def add_breakpoint(self, id, file, line):
-		self.driver.add_breakpoint(id, file, line)
+		self.driver.add_breakpoint(id, self, file, line)
 
 	def remove_breakpoint(self, id):
-		self.driver.remove_breakpoint(id)
+		self.driver.remove_breakpoint(self, id)
 
 class GdbDriver(object):
 	def __init__(self):
@@ -234,8 +227,10 @@ class GdbDriver(object):
 		self.running = False
 		self.on_log = Delegate()
 		self.message_queue = ThreadMessageQueue()
+		self.response_handler_queue = []
+		self.thread = None
 
-	def start(self):
+	def start(self, hdlr):
 		if self.process:
 			raise DebuggerAlreadyRunningError(
 					"Cannot start debugger: GDB is already running.")
@@ -246,18 +241,39 @@ class GdbDriver(object):
 		except OSError as e:
 			raise DebuggerSpawnError("Failed to start GDB: " + e.strerror)
 
+		if self.thread:
+			raise ThreadAlreadyRunningError(
+					'Cannot start listen thread - already running.')
+		listen = self.listen
+		class Thread(threading.Thread):
+			def run(self):
+				listen()
+		self.thread = Thread()
+		self.thread.start()
+
+		self.read_until_challenge(hdlr)
+
 	def stop(self):
 		if not self.process:
 			raise DebuggerMissingError("Cannot stop debugger: GDB not running.")
+		if not self.thread:
+			raise ThreadNotRunningError(
+					'Cannot stop debugger - listen thread not running.')
 		self.process.stdin.close()
-		self.process.wait()
+		self.thread.join()
 
-	def run(self):
+	def run(self, hdlr):
 		if not self.process:
 			raise DebuggerMissingError("Cannot run debugger: GDB not running.")
 		if self.running:
 			raise DriverAlreadyRunningError("Cannot start debugging: already debugging.")
+		def on_response(rcrd):
+			if rcrd.response != 'running':
+				raise UnexpectedResponseError(
+						'Unexpected response to -exec-run: ' + rcrd.response)
+		self.response_handler_queue.append(on_response)
 		self.process.stdin.write('-exec-run\n')
+		self.read_until_challenge(hdlr)
 
 	def read(self, hdlr):
 		try:
@@ -266,25 +282,56 @@ class GdbDriver(object):
 			raise QueueEmptyError('Tried to read from empty thread queue.')
 		meth, args = msg
 		try:
-			f = getattr(hdlr, meth)
+			f = getattr(self, meth)
 		except AttributeError:
 			raise QueueCorruptError('Unknown method "' + meth + '".')
 		try:
-			f(*args)
+			f(hdlr, *args)
 		except TypeError as e:
 			raise QueueCorruptError('Invalid args in queue: "' + e.msg + '".')
+	
+	def handle_communication(self, hdlr, ln):
+		hdlr.handle_communication(ln)
+
+	def handle_response(self, hdlr, rcrd):
+		rspns_hdlr = self.response_handler_queue.pop()
+		rspns_hdlr(rcrd)
 
 	def read_all_pending(self, hdlr):
 		while not self.message_queue.empty():
 			self.read(hdlr)
 
-	def set_file(self, file):
+	def handle_challenge(self, hdlr):
+		self.on_log.signal('Base handle_challenge.')
+
+	def read_until_challenge(self, hdlr):
+		self.on_log.signal('Read until challenge.')
+		challenge_recv = [False]
+		def on_challenge(hdlr):
+			self.on_log.signal('Challenge received.')
+			challenge_recv[0] = True
+		self.handle_challenge = on_challenge
+		while not challenge_recv[0]:
+			while not self.message_queue.empty():
+				self.read(hdlr)
+			if not challenge_recv[0]:
+				time.sleep(0.1)
+		del self.handle_challenge
+
+	def set_file(self, hdlr, file):
 		self.on_log.signal("Setting debug file: " + file + "\n")
 		if not self.process:
 			raise DebuggerMissingError("Cannot set file: GDB not running.")
 		if self.running:
 			raise DriverAlreadyRunningError("Cannot set file: GDB already running.")
+		def on_response(rcrd):
+			if rcrd.response != 'done':
+				raise UnexpectedResponseError(
+						'Unexpected response to -file-exec-and-symbols: '
+						+ rcrd.response)
+		self.response_handler_queue.append(on_response)
 		self.process.stdin.write('-file-exec-and-symbols ' + file + '\n')
+		self.read_until_challenge(hdlr)
 
 	def listen(self):
 		while True:
@@ -293,14 +340,28 @@ class GdbDriver(object):
 				self.message_queue.append(('handle_eof', []))
 				break
 			self.message_queue.append(('handle_communication', [ln]))
+			if ln.find('(gdb)') >= 0:
+				self.message_queue.append(('handle_challenge', ()))
+			elif ln[0] == '^':
+				class Record(object): pass
+				rcrd = Record()
+				deserialize_gdb_record(rcrd, ln[1:])
+				self.message_queue.append('handle_response', rcrd)
 		self.process = None
 
-	def add_breakpoint(self, id, file, line):
+	def add_breakpoint(self, hdlr, id, file, line):
 		self.on_log.signal("Adding breakpoint: " + file + ":" + str(line) + "\n")
+		def on_response(rcrd):
+			if rcrd.response != 'done':
+				raise UnexpectedResponseError(
+						'Unexpected response to -break-insert: '
+						+ rcrd.response)
+		self.response_handler_queue.append(on_response)
 		cmd = '-break-insert ' + file + ':' + str(line) + '\n'
 		self.process.stdin.write(cmd)
+		self.read_until_challenge(hdlr)
 
-	def remove_breakpoint(self, id):
+	def remove_breakpoint(self, hdlr, id):
 		asdf = self.doesntexist
 
 class BreakpointCollection(object):
