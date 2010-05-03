@@ -2,6 +2,13 @@ import vim
 import subprocess
 import threading
 
+def log(msg):
+	f = file('log', 'a+')
+	try:
+		f.write(msg)
+	finally:
+		f.close()
+
 class Error(Exception): pass
 
 class CreateBufferError(Error):
@@ -99,6 +106,7 @@ class Session(object):
 		self.log_window.log_message("This is the log window.")
 
 	def start_debugger(self):
+		log("start_debugger\n")
 		if self.thread:
 			raise ThreadAlreadyRunningError(
 					'Cannot start listen thread - already running.')
@@ -114,18 +122,27 @@ class Session(object):
 		self.thread.start()
 
 	def stop_debugger(self):
+		log("stop_debugger\n")
 		if not self.thread:
 			raise ThreadNotRunningError(
 					'Cannot stop debugger - listen thread not running.')
+		log("calling driver.stop\n")
 		self.driver.stop()
+		log("calling thread.join\n")
 		self.thread.join()
+		log("calling driver.read_all_pending\n")
 		self.driver_proxy.read_all_pending(self.message_queue)
+		log("stop_debugger returning\n")
 
 	def shutdown(self):
-		try: self.stop_debugger()
+		log("shutdown\n")
+		try:
+			log("calling stop_debugger\n")
+			self.stop_debugger()
 		except DebuggerMissingError: pass
 
 	def update(self):
+		log("update\n")
 		if not self.thread:
 			raise ThreadNotRunningError(
 					'Cannot update dbg thread - listen thread not running.')
@@ -152,18 +169,14 @@ class DriverProxy(object):
 			raise QueueCorruptError('Invalid args in queue: "' + e.msg + '".')
 
 	def read_all_pending(self, queue):
-		i = 0
 		while not queue.empty():
-			i += 1
-			if i > 100: break
 			self.read(queue)
-		print i
 
 	def handle_communication(self, msg):
 		self.on_communication.signal(msg)
 
 	def handle_eof(self):
-		raise DebuggerStdoutClosed('GDB stdout file closed.')
+		print "Debugger process exitted."
 
 class GdbDriver(object):
 	def __init__(self):
@@ -174,23 +187,30 @@ class GdbDriver(object):
 			raise DebuggerAlreadyRunningError(
 					"Cannot start debugger: GDB is already running.")
 		try:
-			self.process = subprocess.Popen("gdb", shell=True, bufsize=1,
+			self.process = subprocess.Popen("gdb --interpreter mi", shell=True, bufsize=1,
 					stdin=subprocess.PIPE, stdout=subprocess.PIPE,
 					stderr=subprocess.STDOUT)
 		except OSError as e:
 			raise DebuggerSpawnError("Failed to start GDB: " + e.strerror)
 
 	def stop(self):
+		log('driver.stop\n')
 		if not self.process:
 			raise DebuggerMissingError("Cannot stop debugger: GDB not running.")
-		self.process.terminate()
+		self.process.stdin.close()
+		log('driver.stop - waiting\n')
 		self.process.wait()
+		log('driver.stop - returning\n')
 
 	def listen(self, queue):
+		log('Listen thread starting to listen.\n')
 		while True:
 			ln = self.process.stdout.readline()
+			log('Listen thread: received line: ' + ln)
 			if not ln:
 				queue.append(('handle_eof', []))
+				break
+		log('Listen thread ending.\n')
 		self.process = None
 
 class BreakpointCollection(object):
@@ -214,6 +234,9 @@ class LogWindow(object):
 	def create_buffer(self):
 		buf_name = "/DbgLog" + str(self.session_id)
 		cmd = "bad " + buf_name
+		vim.command(cmd)
+		cmd = 'call setbufvar("' + buf_name + '", "&buftype", "nofile")'
+		print cmd
 		vim.command(cmd)
 		bufs = [b for b in vim.buffers if b.name == buf_name]
 		try:
