@@ -23,3 +23,11 @@ function! GdbStart()
 	call <Sid>DbgCommand("gdb_session.display_log_window()")
 	call <Sid>DbgCommand("gdb_session.start_debugger()")
 endfunction
+
+function! GdbStop()
+	call <Sid>DbgCommand("gdb_session.shutdown()")
+endfunction
+
+function! GdbUpdate()
+	call <Sid>DbgCommand("gdb_session.update()")
+endfunction

@@ -46,7 +46,7 @@ class Delegate(object):
 		self.hndlrs = {}
 
 	def add_handler(self, id, hndlr):
-		self.hndlrs[i] = hndlr
+		self.hndlrs[id] = hndlr
 
 	def remove_handler(self, id, hndlr):
 		del self.hndlrs[i]
@@ -82,7 +82,7 @@ class ThreadMessageQueue(object):
 			l = len(self.items)
 		finally:
 			self.lock.release()
-		return l > 0
+		return l == 0
 
 session_id = 100
 def get_session_id():
@@ -100,13 +100,17 @@ class Session(object):
 		self.thread = None
 		self.message_queue = ThreadMessageQueue()
 
+		# Display all communications in the log window.
+		self.driver_proxy.on_communication.add_handler(
+				self.log_window, self.log_window.log_message)
+
 	def display_log_window(self):
 		self.log_window.create_buffer()
 		self.log_window.display()
-		self.log_window.log_message("This is the log window.")
 
 	def start_debugger(self):
 		log("start_debugger\n")
+		self.log_window.log_message("Starting debugger.")
 		if self.thread:
 			raise ThreadAlreadyRunningError(
 					'Cannot start listen thread - already running.')
@@ -122,6 +126,7 @@ class Session(object):
 		self.thread.start()
 
 	def stop_debugger(self):
+		self.log_window.log_message("Stopping debugger.")
 		log("stop_debugger\n")
 		if not self.thread:
 			raise ThreadNotRunningError(
@@ -156,6 +161,7 @@ class DriverProxy(object):
 	def read(self, queue):
 		try:
 			msg = queue.pop()
+			log("driver_proxy: msg recv: " + str(msg) + "\n")
 		except IndexError:
 			raise QueueEmptyError('Tried to read from empty thread queue.')
 		meth, args = msg
@@ -169,6 +175,8 @@ class DriverProxy(object):
 			raise QueueCorruptError('Invalid args in queue: "' + e.msg + '".')
 
 	def read_all_pending(self, queue):
+		log("driver_proxy.read_all_pending()\n")
+		log("queue = " + str(queue.items))
 		while not queue.empty():
 			self.read(queue)
 
@@ -210,6 +218,8 @@ class GdbDriver(object):
 			if not ln:
 				queue.append(('handle_eof', []))
 				break
+			else:
+				queue.append(('handle_communication', [ln]))
 		log('Listen thread ending.\n')
 		self.process = None
 
@@ -236,7 +246,6 @@ class LogWindow(object):
 		cmd = "bad " + buf_name
 		vim.command(cmd)
 		cmd = 'call setbufvar("' + buf_name + '", "&buftype", "nofile")'
-		print cmd
 		vim.command(cmd)
 		bufs = [b for b in vim.buffers if b.name == buf_name]
 		try:
@@ -247,8 +256,10 @@ class LogWindow(object):
 	def display(self):
 		if not self.buffer:
 			raise BufferMissingError("Cannot display log window - buffer not created.")
-		cmd = "sb " + self.buffer.name
-		vim.command(cmd)
+		existing_winds = [w for w in vim.windows if w.buffer == self.buffer]
+		if not existing_winds:
+			cmd = "sb " + self.buffer.name
+			vim.command(cmd)
 
 	def log_message(self, msg):
 		if not self.buffer:
