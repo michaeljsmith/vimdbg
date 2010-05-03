@@ -139,7 +139,7 @@ class Session(object):
 			raise ThreadAlreadyRunningError(
 					'Cannot start listen thread - already running.')
 
-		self.driver.start()
+		self.driver_proxy.start()
 
 		driver = self.driver
 		message_queue = self.message_queue
@@ -156,7 +156,7 @@ class Session(object):
 		if not self.thread:
 			raise ThreadNotRunningError(
 					'Cannot stop debugger - listen thread not running.')
-		self.driver.stop()
+		self.driver_proxy.stop()
 		self.thread.join()
 		self.driver_proxy.read_all_pending(self.message_queue)
 
@@ -164,7 +164,7 @@ class Session(object):
 		if not self.driver_connected_to_bps:
 			self.connect_driver_to_breakpoints()
 		self.log_window.log_message("Running debugger.\n")
-		self.driver.run()
+		self.driver_proxy.run()
 
 	def shutdown(self):
 		try:
@@ -182,20 +182,20 @@ class Session(object):
 			raise DriverBreakpointsAlreadyConnectedError(
 					"Cannot connect driver to breakpoints - already connected.")
 		self.log_window.log_message('Connecting breakpoings.' + str(self.bps.bps))
-		self.bps.on_add.add_handler(self.driver, self.driver.add_breakpoint)
-		self.bps.on_remove.add_handler(self.driver, self.driver.remove_breakpoint)
+		self.bps.on_add.add_handler(self.driver_proxy, self.driver_proxy.add_breakpoint)
+		self.bps.on_remove.add_handler(self.driver_proxy, self.driver_proxy.remove_breakpoint)
 		for id, (file, line) in self.bps.bps.iteritems():
-			self.driver.add_breakpoint(id, file, line)
+			self.driver_proxy.add_breakpoint(id, file, line)
 		self.driver_connected_to_bps = True
 
 	def disconnect_driver_from_breakpoints(self):
 		if not self.driver_connected_to_bps:
 			raise DriverBreakpointsNotConnectedError(
 					"Cannot disconnect driver from breakpoints - not connected.")
-		self.bps.on_add.remove_handler(self.driver)
-		self.bps.on_remove.remove_handler(self.driver)
-		for id, (drvr_id, file, line) in self.driver.bps.iteritems():
-			self.driver.remove_breakpoint(id)
+		self.bps.on_add.remove_handler(self.driver_proxy)
+		self.bps.on_remove.remove_handler(self.driver_proxy)
+		for id, (drvr_id, file, line) in self.driver_proxy.bps.iteritems():
+			self.driver_proxy.remove_breakpoint(id)
 		self.driver_connected_to_bps = False
 
 class DriverProxy(object):
@@ -228,10 +228,27 @@ class DriverProxy(object):
 	def handle_eof(self):
 		print "Debugger process exitted."
 
+	def start(self):
+		self.driver.start()
+
+	def stop(self):
+		self.driver.stop()
+
+	def run(self):
+		self.driver.run()
+
+	def set_file(self, file):
+		self.driver.set_file(file)
+
+	def add_breakpoint(self, id, file, line):
+		self.driver.add_breakpoint(id, file, line)
+
+	def remove_breakpoint(self, id):
+		self.driver.remove_breakpoint(id)
+
 class GdbDriver(object):
 	def __init__(self):
 		self.process = None
-		self.bps = {}
 		self.running = False
 		self.on_log = Delegate()
 
@@ -273,8 +290,7 @@ class GdbDriver(object):
 			if not ln:
 				queue.append(('handle_eof', []))
 				break
-			else:
-				queue.append(('handle_communication', [ln]))
+			queue.append(('handle_communication', [ln]))
 		self.process = None
 
 	def add_breakpoint(self, id, file, line):
