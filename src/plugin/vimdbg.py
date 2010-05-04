@@ -2,6 +2,7 @@ import vim
 import subprocess
 import threading
 import time
+import re
 
 def log(msg):
 	f = open('log.txt', 'a+')
@@ -110,19 +111,36 @@ class ThreadMessageQueue(object):
 		return l == 0
 
 def deserialize_gdb_record(rcrd, text):
-	entries = text.split(',')
-	log('ds entries = ' + str(entries) + '\n')
-	response = entries[0]
-	rcrd.response = response.strip(' \t\r\n')
-	log('ds response = ' + rcrd.response + '\n')
-	for entry in entries[1:]:
-		log('ds entry = ' + entry + '\n')
-		key, value = entry.split('=')
-		key = value.strip(' \t\r\n')
-		value = value.strip(' \t\r\n')
-		log('ds key = ' + key + '\n')
-		log('ds value = ' + value + '\n')
-		setattr(rcrd, key, value)
+
+	def extract_pattern(ptn, tx):
+		m = re.match(ptn, tx)
+		val = m.group(0)
+		end = m.end(0)
+		return val, tx[end:]
+
+	tx = text
+	rcrd.response, tx = extract_pattern(r"([A-Za-z0-9_]+)[ \t\r\n]*", tx)
+	log('rcrd.response = ' + str(rcrd.response) + '\n')
+	comma, tx = extract_pattern(r"(,)[ \t]*", tx)
+	log('comma = ' + str(comma) + '\n')
+	try:
+		while True:
+			key, tx = extract_pattern(r"([A-Za-z0-9_]+)[ \t\r\n]*", tx)
+			log('key = ' + key + '\n')
+			equals, tx = extract_pattern(r"(=)[ \t\r\n]*", tx)
+			log('equals = ' + equals + '\n')
+			#value, tx = extract_pattern(r'"([^\  "]+|\  .)+"', tx)
+			value, tx = extract_pattern(r'"((?:[^"\\]*\\")*[^"\\]*)"', tx)
+			#re.match(r'"((?:[^"\\]*\\")*[^"\\]*)"', r'"asdf\" \""').group(0)
+			log('value = ' + value + '\n')
+			comma, tx = extract_pattern(r"(,)[ \t\r\n]*", tx)
+			log('comma = ' + comma + '\n')
+			setattr(rcrd, key, value)
+	except IndexError:
+		pass
+	except AttributeError:
+		pass
+	log(str(rcrd.__dict__) + '\n')
 
 session_id = 100
 def get_session_id():
