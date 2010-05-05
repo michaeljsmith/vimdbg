@@ -114,17 +114,17 @@ def deserialize_gdb_record(rcrd, text):
 
 	def extract_pattern(ptn, tx):
 		m = re.match(ptn, tx)
-		val = m.group(0)
-		end = m.end(0)
+		val = m.group(1)
+		end = m.end(1)
 		return val, tx[end:]
 
 	tx = text
 	rcrd.response, tx = extract_pattern(r"([A-Za-z0-9_]+)[ \t\r\n]*", tx)
 	log('rcrd.response = ' + str(rcrd.response) + '\n')
-	comma, tx = extract_pattern(r"(,)[ \t]*", tx)
-	log('comma = ' + str(comma) + '\n')
 	try:
 		while True:
+			comma, tx = extract_pattern(r"(,)[ \t]*", tx)
+			log('comma = ' + str(comma) + '\n')
 			key, tx = extract_pattern(r"([A-Za-z0-9_]+)[ \t\r\n]*", tx)
 			log('key = ' + key + '\n')
 			equals, tx = extract_pattern(r"(=)[ \t\r\n]*", tx)
@@ -132,8 +132,6 @@ def deserialize_gdb_record(rcrd, text):
 			value, tx = extract_pattern(r'"((?:[^"\\]*\\")*[^"\\]*)"', tx)
 			log('value = ' + value + '\n')
 			setattr(rcrd, key, value)
-			comma, tx = extract_pattern(r"(,)[ \t\r\n]*", tx)
-			log('comma = ' + comma + '\n')
 	except IndexError:
 		pass
 	except AttributeError:

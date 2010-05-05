@@ -5,6 +5,7 @@ endif
 let s:script_location = expand("<sfile>:h")
 let s:script_module = expand("<sfile>:t:r")
 let s:script_loaded = 0
+let s:debugger_started = 0
 
 function! <Sid>DbgCommand(cmd)
 	let python_cmd = "try:\n"
@@ -36,29 +37,46 @@ function! <Sid>GdbEnsureLoaded()
 	endif
 endfunction
 
+function! <Sid>GdbEnsureStarted()
+	call <Sid>GdbEnsureLoaded()
+	if !s:debugger_started
+		call GdbStart()
+	endif
+endfunction
+
 function! GdbStart()
 	call <Sid>GdbEnsureLoaded()
-	call <Sid>DbgCommand("gdb_session.display_log_window()")
-	call <Sid>DbgCommand("gdb_session.start_debugger()")
+	if !s:debugger_started
+		call <Sid>DbgCommand("gdb_session.display_log_window()")
+		call <Sid>DbgCommand("gdb_session.start_debugger()")
+
+		augroup DbgCleanup
+		autocmd VimLeave * call GdbStop()
+		augroup end
+		let s:debugger_started = 1
+	endif
 endfunction
 
 function! GdbFile(file)
-	call <Sid>GdbEnsureLoaded()
+	call <Sid>GdbEnsureStarted()
 	call <Sid>DbgCommand("gdb_driver.set_file('" . a:file . "')")
 endfunction
 
 function! GdbRun()
-	call <Sid>GdbEnsureLoaded()
+	call <Sid>GdbEnsureStarted()
 	call <Sid>DbgCommand("gdb_session.run_debugger()")
 endfunction
 
 function! GdbStop()
-	call <Sid>GdbEnsureLoaded()
-	call <Sid>DbgCommand("gdb_session.shutdown()")
+	if s:debugger_started
+		call <Sid>DbgCommand("gdb_session.shutdown()")
+
+		autocmd! DbgCleanup
+	endif
 endfunction
 
 function! GdbUpdate()
-	call <Sid>GdbEnsureLoaded()
+	call <Sid>GdbEnsureStarted()
 	call <Sid>DbgCommand("gdb_session.update()")
 endfunction
 
