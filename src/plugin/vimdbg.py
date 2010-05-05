@@ -4,12 +4,17 @@ import threading
 import time
 import re
 
+thread_logging = False
+
 def log(msg):
-	f = open('log.txt', 'a+')
-	try:
-		f.write(msg)
-	finally:
-		f.close()
+	global thread_logging
+
+	if thread_logging:
+		f = open('log.txt', 'a+')
+		try:
+			f.write(msg)
+		finally:
+			f.close()
 
 class Error(Exception): pass
 

@@ -7,6 +7,10 @@ let s:script_module = expand("<sfile>:t:r")
 let s:script_loaded = 0
 let s:debugger_started = 0
 
+if !exists("g:debugger_thread_logging")
+	let g:debugger_thread_logging = 0
+endif
+
 function! <Sid>DbgCommand(cmd)
 	let python_cmd = "try:\n"
 	let python_cmd .= "\t" . a:cmd . "\n"
@@ -20,6 +24,7 @@ function! <Sid>LoadPython()
 	exe 'python sys.path.append(r"' . s:script_location . '")'
 	exe 'python try: reload(' . s:script_module . ")\n" . 'except NameError: pass'
 	exe 'python import ' . s:script_module
+	exe 'python vimdbg.thread_logging = ' . g:debugger_thread_logging
 endfunction
 
 function! <Sid>GdbInitialize()
@@ -72,6 +77,7 @@ function! GdbStop()
 		call <Sid>DbgCommand("gdb_session.shutdown()")
 
 		autocmd! DbgCleanup
+		let s:debugger_started = 0
 	endif
 endfunction
 
