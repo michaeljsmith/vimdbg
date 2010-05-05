@@ -5,7 +5,7 @@ endif
 let s:script_location = expand("<sfile>:h")
 let s:script_module = expand("<sfile>:t:r")
 let s:script_loaded = 0
-let s:debugger_started = 0
+let s:debugger_begun = 0
 
 if !exists("g:debugger_thread_logging")
 	let g:debugger_thread_logging = 0
@@ -42,47 +42,62 @@ function! <Sid>GdbEnsureLoaded()
 	endif
 endfunction
 
-function! <Sid>GdbEnsureStarted()
+function! <Sid>GdbEnsureBegun()
 	call <Sid>GdbEnsureLoaded()
-	if !s:debugger_started
-		call GdbStart()
+	if !s:debugger_begun
+		call GdbBegin()
 	endif
 endfunction
 
-function! GdbStart()
+function! GdbBegin()
 	call <Sid>GdbEnsureLoaded()
-	if !s:debugger_started
+	if !s:debugger_begun
 		call <Sid>DbgCommand("gdb_session.display_log_window()")
 		call <Sid>DbgCommand("gdb_session.start_debugger()")
 
 		augroup DbgCleanup
-		autocmd VimLeave * call GdbStop()
+		autocmd VimLeave * call GdbEnd()
 		augroup end
-		let s:debugger_started = 1
+		let s:debugger_begun = 1
 	endif
 endfunction
 
+function! GdbEnd()
+	if s:debugger_begun
+		call <Sid>DbgCommand("gdb_session.shutdown()")
+
+		autocmd! DbgCleanup
+		let s:debugger_begun = 0
+	endif
+endfunction
+
+function! GdbListFeatures()
+	call <Sid>GdbEnsureBegun()
+	call <Sid>DbgCommand("print 'Gdb features = ' + str(gdb_driver.get_features())")
+endfunction
+
+function! GdbListTargetFeatures()
+	call <Sid>GdbEnsureBegun()
+	call <Sid>DbgCommand("print 'Gdb target features = ' + str(gdb_driver.get_target_features())")
+endfunction
+
 function! GdbFile(file)
-	call <Sid>GdbEnsureStarted()
+	call <Sid>GdbEnsureBegun()
 	call <Sid>DbgCommand("gdb_driver.set_file('" . a:file . "')")
 endfunction
 
 function! GdbRun()
-	call <Sid>GdbEnsureStarted()
+	call <Sid>GdbEnsureBegun()
 	call <Sid>DbgCommand("gdb_session.run_debugger()")
 endfunction
 
-function! GdbStop()
-	if s:debugger_started
-		call <Sid>DbgCommand("gdb_session.shutdown()")
-
-		autocmd! DbgCleanup
-		let s:debugger_started = 0
-	endif
+function! GdbBreak()
+	call <Sid>GdbEnsureBegun()
+	call <Sid>DbgCommand("gdb_session.interrupt_debugger()")
 endfunction
 
 function! GdbUpdate()
-	call <Sid>GdbEnsureStarted()
+	call <Sid>GdbEnsureBegun()
 	call <Sid>DbgCommand("gdb_session.update()")
 endfunction
 

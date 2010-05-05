@@ -120,7 +120,7 @@ def deserialize_gdb_record(rcrd, text):
 	def extract_pattern(ptn, tx):
 		m = re.match(ptn, tx)
 		val = m.group(1)
-		end = m.end(1)
+		end = m.end(0)
 		return val, tx[end:]
 
 	tx = text
@@ -130,13 +130,28 @@ def deserialize_gdb_record(rcrd, text):
 		while True:
 			comma, tx = extract_pattern(r"(,)[ \t]*", tx)
 			log('comma = ' + str(comma) + '\n')
-			key, tx = extract_pattern(r"([A-Za-z0-9_]+)[ \t\r\n]*", tx)
+			key, tx = extract_pattern(r"([-_A-Za-z0-9]+)[ \t\r\n]*", tx)
 			log('key = ' + key + '\n')
 			equals, tx = extract_pattern(r"(=)[ \t\r\n]*", tx)
 			log('equals = ' + equals + '\n')
-			value, tx = extract_pattern(r'"((?:[^"\\]*\\")*[^"\\]*)"', tx)
-			log('value = ' + value + '\n')
-			setattr(rcrd, key, value)
+			value = [None]
+			try:
+				list, tx = extract_pattern(r'\[([^\]]*)\][ \t\r\n]*', tx)
+				log('list = ' + list + '\n')
+				value[0] = []
+				while True:
+					feat, list = extract_pattern(r'"((?:[^"\\]*\\")*[^"\\]*)"', list)
+					log('feat = ' + str(feat) + '\n')
+					value[0].append(feat)
+					log('list remaining = ' + list)
+					comma, list = extract_pattern(r"(,)[ \t]*", list)
+					log('comma = ' + str(comma) + '\n')
+			except AttributeError:
+				pass
+			if value[0] == None:
+				value[0], tx = extract_pattern(r'"((?:[^"\\]*\\")*[^"\\]*)"', tx)
+			log('value = ' + str(value[0]) + '\n')
+			setattr(rcrd, key, value[0])
 	except IndexError:
 		pass
 	except AttributeError:
@@ -200,6 +215,9 @@ class Session(object):
 		self.log_window.log_message("Running debugger.\n")
 		self.driver_proxy.run()
 
+	def interrupt_debugger(self):
+		self.driver_proxy.interrupt()
+
 	def shutdown(self):
 		try:
 			self.stop_debugger()
@@ -248,6 +266,9 @@ class DriverProxy(object):
 
 	def run(self):
 		self.driver.run()
+	
+	def interrupt(self):
+		self.driver.interrupt()
 
 	def add_breakpoint(self, id, file, line):
 		self.driver.add_breakpoint(id, file, line)
@@ -264,6 +285,56 @@ class GdbDriver(object):
 		self.response_handler_queue = []
 		self.thread = None
 		self.hdlr = None
+
+	def get_features(self):
+		if not self.process:
+			raise DebuggerMissingError("Cannot get features: GDB not running.")
+		exc = [None]
+		rslt = [None]
+		def on_response(rcrd):
+			if rcrd.response == 'done':
+				rslt[0] = rcrd.features
+			elif rcrd.response == 'error':
+				self.on_log.signal('Error when getting GDB features.')
+				exc[0] = GdbError('Gdb responded: ' + rcrd.msg)
+			else:
+				exc[0] = UnexpectedResponseError(
+						'Unexpected response to -list-features: ' + rcrd.response)
+		self.response_handler_queue.append(on_response)
+		self.process.stdin.write('-list-features\n')
+		try:
+			self.read_until_challenge()
+		except ResponseTimeoutError:
+			raise ResponseTimeoutError('Timeout after listing features.')
+		if exc[0]:
+			raise exc[0]
+
+		return rslt[0]
+
+	def get_target_features(self):
+		if not self.process:
+			raise DebuggerMissingError("Cannot get target features: GDB not running.")
+		exc = [None]
+		rslt = [None]
+		def on_response(rcrd):
+			if rcrd.response == 'done':
+				rslt[0] = rcrd.features
+			elif rcrd.response == 'error':
+				self.on_log.signal('Error when getting GDB target features.')
+				exc[0] = GdbError('Gdb responded: ' + rcrd.msg)
+			else:
+				exc[0] = UnexpectedResponseError(
+						'Unexpected response to -list-target-features: ' + rcrd.response)
+		self.response_handler_queue.append(on_response)
+		self.process.stdin.write('-list-target-features\n')
+		try:
+			self.read_until_challenge()
+		except ResponseTimeoutError:
+			raise ResponseTimeoutError('Timeout after listing target features.')
+		if exc[0]:
+			raise exc[0]
+
+		return rslt[0]
 
 	def start(self):
 		if self.process:
@@ -322,6 +393,26 @@ class GdbDriver(object):
 			self.read_until_challenge()
 		except ResponseTimeoutError:
 			raise ResponseTimeoutError('Timeout after running target.')
+		if exc[0]:
+			raise exc[0]
+
+	def interrupt(self):
+		if not self.process:
+			raise DebuggerMissingError("Cannot interrupt debugger: GDB not running.")
+		exc = [None]
+		def on_response(rcrd):
+			if rcrd.response == 'error':
+				self.on_log.signal('Error when interrupting gdb.')
+				exc[0] = GdbError('Gdb responded: ' + rcrd.msg)
+			elif rcrd.response != 'done':
+				exc[0] = UnexpectedResponseError(
+						'Unexpected response to -exec-interrupt: ' + rcrd.response)
+		self.response_handler_queue.append(on_response)
+		self.process.stdin.write('-exec-interrupt\n')
+		try:
+			self.read_until_challenge()
+		except ResponseTimeoutError:
+			raise ResponseTimeoutError('Timeout after interrupting target.')
 		if exc[0]:
 			raise exc[0]
 
