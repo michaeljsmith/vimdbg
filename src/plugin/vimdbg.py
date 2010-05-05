@@ -129,13 +129,11 @@ def deserialize_gdb_record(rcrd, text):
 			log('key = ' + key + '\n')
 			equals, tx = extract_pattern(r"(=)[ \t\r\n]*", tx)
 			log('equals = ' + equals + '\n')
-			#value, tx = extract_pattern(r'"([^\  "]+|\  .)+"', tx)
 			value, tx = extract_pattern(r'"((?:[^"\\]*\\")*[^"\\]*)"', tx)
-			#re.match(r'"((?:[^"\\]*\\")*[^"\\]*)"', r'"asdf\" \""').group(0)
 			log('value = ' + value + '\n')
+			setattr(rcrd, key, value)
 			comma, tx = extract_pattern(r"(,)[ \t\r\n]*", tx)
 			log('comma = ' + comma + '\n')
-			setattr(rcrd, key, value)
 	except IndexError:
 		pass
 	except AttributeError:
@@ -283,6 +281,7 @@ class GdbDriver(object):
 			def run(self):
 				listen()
 		self.thread = Thread()
+		self.thread.setDaemon(True)
 		self.thread.start()
 
 		try:
@@ -298,17 +297,21 @@ class GdbDriver(object):
 					'Cannot stop debugger - listen thread not running.')
 		self.process.stdin.close()
 		self.thread.join()
+		self.thread = None
+		self.read_all_pending()
 
 	def run(self):
 		if not self.process:
 			raise DebuggerMissingError("Cannot run debugger: GDB not running.")
 		if self.running:
 			raise DriverAlreadyRunningError("Cannot start debugging: already debugging.")
+		exc = [None]
 		def on_response(rcrd):
 			if rcrd.response == 'error':
-				raise GdbError('Gdb responded: ' + rcrd.msg)
+				self.on_log.signal('Error when running gdb.')
+				exc[0] = GdbError('Gdb responded: ' + rcrd.msg)
 			elif rcrd.response != 'running':
-				raise UnexpectedResponseError(
+				exc[0] = UnexpectedResponseError(
 						'Unexpected response to -exec-run: ' + rcrd.response)
 		self.response_handler_queue.append(on_response)
 		self.process.stdin.write('-exec-run\n')
@@ -316,6 +319,8 @@ class GdbDriver(object):
 			self.read_until_challenge()
 		except ResponseTimeoutError:
 			raise ResponseTimeoutError('Timeout after running target.')
+		if exc[0]:
+			raise exc[0]
 
 	def read(self):
 		try:
