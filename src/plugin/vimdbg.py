@@ -3,6 +3,7 @@ import subprocess
 import threading
 import time
 import re
+import ctypes
 
 thread_logging = False
 
@@ -399,22 +400,8 @@ class GdbDriver(object):
 	def interrupt(self):
 		if not self.process:
 			raise DebuggerMissingError("Cannot interrupt debugger: GDB not running.")
-		exc = [None]
-		def on_response(rcrd):
-			if rcrd.response == 'error':
-				self.on_log.signal('Error when interrupting gdb.')
-				exc[0] = GdbError('Gdb responded: ' + rcrd.msg)
-			elif rcrd.response != 'done':
-				exc[0] = UnexpectedResponseError(
-						'Unexpected response to -exec-interrupt: ' + rcrd.response)
-		self.response_handler_queue.append(on_response)
-		self.process.stdin.write('-exec-interrupt\n')
-		try:
-			self.read_until_challenge()
-		except ResponseTimeoutError:
-			raise ResponseTimeoutError('Timeout after interrupting target.')
-		if exc[0]:
-			raise exc[0]
+		rslt = ctypes.windll.kernel32.GenerateConsoleCtrlEvent(0, self.process.pid)
+		print 'GenerateConsoleCtrlEvent(0, ' + str(self.process.pid) + ') == ' + str(rslt) + ', GetLastError() == ' + str(ctypes.windll.kernel32.GetLastError())
 
 	def read(self):
 		try:
